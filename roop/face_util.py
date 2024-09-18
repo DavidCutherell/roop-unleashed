@@ -21,16 +21,20 @@ def get_face_analyser() -> Any:
     global FACE_ANALYSER
 
     with THREAD_LOCK_ANALYSER:
-        if FACE_ANALYSER is None:
+        if FACE_ANALYSER is None or roop.globals.g_current_face_analysis != roop.globals.g_desired_face_analysis:
             model_path = resolve_relative_path('..')
+            # removed genderage
+            allowed_modules = roop.globals.g_desired_face_analysis
+            roop.globals.g_current_face_analysis = roop.globals.g_desired_face_analysis
             if roop.globals.CFG.force_cpu:
                 print("Forcing CPU for Face Analysis")
                 FACE_ANALYSER = insightface.app.FaceAnalysis(
-                    name="buffalo_l", root=model_path, providers=["CPUExecutionProvider"]
+                    name="buffalo_l",
+                    root=model_path, providers=["CPUExecutionProvider"],allowed_modules=allowed_modules
                 )
             else:
                 FACE_ANALYSER = insightface.app.FaceAnalysis(
-                    name="buffalo_l", root=model_path, providers=roop.globals.execution_providers
+                    name="buffalo_l", root=model_path, providers=roop.globals.execution_providers,allowed_modules=allowed_modules
                 )
             FACE_ANALYSER.prepare(
                 ctx_id=0,
@@ -67,7 +71,7 @@ def extract_face_images(source_filename, video_info, extra_padding=-1.0):
         else:
             return face_data
     else:
-        source_image = cv2.imread(source_filename)
+        source_image = cv2.imdecode(np.fromfile(source_filename, dtype=np.uint8), cv2.IMREAD_COLOR)
 
     faces = get_all_faces(source_image)
     if faces is None:
@@ -76,6 +80,7 @@ def extract_face_images(source_filename, video_info, extra_padding=-1.0):
     i = 0
     for face in faces:
         (startX, startY, endX, endY) = face["bbox"].astype("int")
+        startX, endX, startY, endY = clamp_cut_values(startX, endX, startY, endY, source_image)
         if extra_padding > 0.0:
             if source_image.shape[:2] == (512, 512):
                 i += 1
@@ -85,6 +90,7 @@ def extract_face_images(source_filename, video_info, extra_padding=-1.0):
             found = False
             for i in range(1, 3):
                 (startX, startY, endX, endY) = face["bbox"].astype("int")
+                startX, endX, startY, endY = clamp_cut_values(startX, endX, startY, endY, source_image)
                 cutout_padding = extra_padding
                 # top needs extra room for detection
                 padding = int((endY - startY) * cutout_padding)
@@ -134,30 +140,6 @@ def clamp_cut_values(startX, endX, startY, endY, image):
         endY = image.shape[0]
     return startX, endX, startY, endY
 
-
-def get_face_swapper() -> Any:
-    global FACE_SWAPPER
-
-    with THREAD_LOCK_SWAPPER:
-        if FACE_SWAPPER is None:
-            model_path = resolve_relative_path("../models/inswapper_128.onnx")
-            FACE_SWAPPER = insightface.model_zoo.get_model(
-                model_path, providers=roop.globals.execution_providers
-            )
-    return FACE_SWAPPER
-
-
-def pre_check() -> bool:
-    download_directory_path = resolve_relative_path("../models")
-    conditional_download(
-        download_directory_path,
-        ["https://huggingface.co/countfloyd/deepfake/resolve/main/inswapper_128.onnx"],
-    )
-    return True
-
-
-def swap_face(source_face: Face, target_face: Face, temp_frame: Frame) -> Frame:
-    return get_face_swapper().get(temp_frame, target_face, source_face, paste_back=True)
 
 
 def face_offset_top(face: Face, offset):
@@ -228,15 +210,18 @@ arcface_dst = np.array(
 )
 
 
-def estimate_norm(lmk, image_size=112, mode="arcface"):
+def estimate_norm(lmk, image_size=112):
     assert lmk.shape == (5, 2)
-    assert image_size % 112 == 0 or image_size % 128 == 0
     if image_size % 112 == 0:
         ratio = float(image_size) / 112.0
         diff_x = 0
-    else:
+    elif image_size % 128 == 0:
         ratio = float(image_size) / 128.0
         diff_x = 8.0 * ratio
+    elif image_size % 512 == 0:
+        ratio = float(image_size) / 512.0
+        diff_x = 32.0 * ratio
+
     dst = arcface_dst * ratio
     dst[:, 0] += diff_x
     tform = trans.SimilarityTransform()
@@ -245,15 +230,10 @@ def estimate_norm(lmk, image_size=112, mode="arcface"):
     return M
 
 
-def norm_crop(img, landmark, image_size=112, mode="arcface"):
-    M = estimate_norm(landmark, image_size, mode)
-    warped = cv2.warpAffine(img, M, (image_size, image_size), borderValue=0.0)
-    return warped
-
 
 # aligned, M = norm_crop2(f[1], face.kps, 512)
-def norm_crop2(img, landmark, image_size=112, mode="arcface"):
-    M = estimate_norm(landmark, image_size, mode)
+def align_crop(img, landmark, image_size=112, mode="arcface"):
+    M = estimate_norm(landmark, image_size)
     warped = cv2.warpAffine(img, M, (image_size, image_size), borderValue=0.0)
     return warped, M
 
@@ -321,4 +301,9 @@ def trans_points(pts, M):
         return trans_points2d(pts, M)
     else:
         return trans_points3d(pts, M)
+    
+def create_blank_image(width, height):
+    img = np.zeros((height, width, 4), dtype=np.uint8)
+    img[:] = [0,0,0,0]
+    return img
 

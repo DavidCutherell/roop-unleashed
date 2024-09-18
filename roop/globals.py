@@ -5,7 +5,9 @@ source_path = None
 target_path = None
 output_path = None
 target_folder_path = None
+startup_args = None
 
+cuda_device_id = 0
 frame_processors: List[str] = []
 keep_fps = None
 keep_frames = None
@@ -26,6 +28,7 @@ execution_threads = None
 headless = None
 log_level = 'error'
 selected_enhancer = None
+subsample_size = 128
 face_swap_mode = None
 blend_ratio = 0.5
 distance_threshold = 0.65
@@ -33,12 +36,16 @@ default_det_size = True
 
 no_face_action = 0
 
-processing = False 
+processing = False
+
+g_current_face_analysis = None
+g_desired_face_analysis = None
 
 FACE_ENHANCER = None
 
 INPUT_FACESETS = []
 TARGET_FACES = []
+
 
 IMAGE_CHAIN_PROCESSOR = None
 VIDEO_CHAIN_PROCESSOR = None
